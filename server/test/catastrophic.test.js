@@ -63,6 +63,37 @@ test('经验探针：线性正则判为 linear-or-better', () => {
   assert.ok(last.attempts < last.length * 20);
 });
 
+test('经验探针：嵌套量词包字符类时同样判 exponential（\\d / \\w / 自定义类）', () => {
+  // 回归：探测字符只从字面 char 里选，'a' 喂不进 \d / [0-9]，
+  // 首字符即失败、步数恒常，经验层误报 linear-or-better，与静态扫描顶牛。
+  for (const p of [String.raw`(\d+)+$`, String.raw`(\w+)+$`, String.raw`([0-9]+)+`, String.raw`([\d]+)+`]) {
+    const r = empiricalProbe(parsePattern(p), p, { lengths: [6, 9, 12, 15] });
+    assert.equal(r.classification, 'exponential', p);
+    assert.equal(r.probeChar, '0', p); // 必须选字符类里的码点，而不是默认 'a'
+    assert.ok(r.samples.at(-1).capped || r.samples.at(-1).attempts > 100000, p);
+  }
+}, { timeout: 20000 });
+
+test('经验探针：安全的字符类结构不误报为危险', () => {
+  for (const p of [String.raw`\d+-\d+`, String.raw`[a-z]+@[a-z]+`, String.raw`\d+\s+\w+`, String.raw`[\d]+$`]) {
+    const r = empiricalProbe(parsePattern(p), p, { lengths: [10, 20, 40, 80] });
+    assert.equal(r.classification, 'linear-or-better', p);
+  }
+});
+
+test('经验探针：纯字面正则选字符行为与旧实现保持一致', () => {
+  const cases = [
+    ['(a+)+b', 'a'],
+    ['a+b', 'a'],
+    ['foobar', 'o'],
+    ['x(a+)+y', 'x'],
+  ];
+  for (const [p, ch] of cases) {
+    const r = empiricalProbe(parsePattern(p), p, { lengths: [6, 9] });
+    assert.equal(r.probeChar, ch, p);
+  }
+});
+
 test('分析报告带改写建议（针对嵌套量词与否定字符类）', () => {
   const r = analyzePattern(parsePattern('(a+)+b'), '(a+)+b');
   assert.ok(r.empirical.suggestion.length >= 2);

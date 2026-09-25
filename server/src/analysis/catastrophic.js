@@ -6,7 +6,7 @@
 //  2) 经验探针——用一串“几乎匹配但末尾不匹配”的对抗输入喂给回溯引擎，
 //     比较输入长度与步数的增长关系，区分线性 / 平方级 / 指数级。
 
-import { intersects } from '../charset.js';
+import { intersects, partition } from '../charset.js';
 import { buildNFA } from '../nfa/thompson.js';
 import { matchBacktracking } from '../match/backtracker.js';
 
@@ -179,21 +179,47 @@ function wrapStartAnchor(ast) {
 
 // ---------- 经验探针 ----------
 
-/** 选一个“尽量能匹配整条正则”的重复字符：取 AST 中出现频率最高的字面字符/数字 */
+/**
+ * 选一个“尽量能匹配整条正则”的重复字符。
+ * 字面子量（char）计权重 1，字符类原子（\d、\w、[0-9]、否定类等，charClass）
+ * 计同样权重；把所有原子的字符集做 minterm 划分后，取被最多原子覆盖的区间
+ * 代表元。这样重复项无论是字面字符（(a+)+）还是字符类（(\d+)+、([0-9]+)+），
+ * 探测串都能真正灌进重复结构、把回溯增长量出来。
+ * 同覆盖度时按 AST 遍历顺序（最靠前的字符）打破平局，保持 (a+)+b → 'a'
+ * 这类既有行为不变；代表元尽量取可打印字符，方便面板展示。
+ */
 function pickProbeChar(ast) {
-  const freq = new Map();
+  const sets = [];
   walk(ast, (n) => {
-    if (n.type === 'char') freq.set(n.cp, (freq.get(n.cp) || 0) + 1);
-  });
-  let best = 0x61; // 默认 a
-  let bestN = -1;
-  freq.forEach((n, cp) => {
-    if (n > bestN) {
-      bestN = n;
-      best = cp;
+    if (n.type === 'char' || n.type === 'charClass') {
+      if (Array.isArray(n.set) && n.set.length > 0) sets.push(n.set);
     }
   });
-  return String.fromCodePoint(best);
+  if (sets.length === 0) return 'a';
+
+  const PRINTABLE_MIN = 0x20;
+  let best = null; // { cp, score, earliest }
+  for (const { lo, hi, mask } of partition(sets)) {
+    let score = 0;
+    let earliest = sets.length;
+    for (let i = 0; i < sets.length; i += 1) {
+      if (mask & (1 << i)) {
+        score += 1;
+        if (i < earliest) earliest = i;
+      }
+    }
+    if (score === 0) continue;
+    // 优先选可打印代表元；该区间没有可打印字符时才退回区间下界
+    const cp = lo >= PRINTABLE_MIN ? lo : (hi > PRINTABLE_MIN ? PRINTABLE_MIN : lo);
+    if (
+      !best ||
+      score > best.score ||
+      (score === best.score && earliest < best.earliest)
+    ) {
+      best = { cp, score, earliest };
+    }
+  }
+  return best ? String.fromCodePoint(best.cp) : 'a';
 }
 
 /**
