@@ -179,12 +179,36 @@ function wrapStartAnchor(ast) {
 
 // ---------- 经验探针 ----------
 
+/** 从字符类集合里挑一个探测用代表字符：优先可打印 ASCII，并避开探针末尾的哨兵字符 \x00 */
+function representativeCp(set) {
+  for (const [lo, hi] of set || []) {
+    const cp = Math.max(lo, 0x21);
+    if (cp < hi && cp <= 0x7e) return cp;
+  }
+  for (const [lo, hi] of set || []) {
+    const cp = Math.max(lo, 1);
+    if (cp < hi) return cp;
+  }
+  return null;
+}
+
 /** 选一个“尽量能匹配整条正则”的重复字符：取 AST 中出现频率最高的字面字符/数字 */
 function pickProbeChar(ast) {
   const freq = new Map();
+  const bump = (cp) => freq.set(cp, (freq.get(cp) || 0) + 1);
   walk(ast, (n) => {
-    if (n.type === 'char') freq.set(n.cp, (freq.get(n.cp) || 0) + 1);
+    if (n.type === 'char') bump(n.cp);
   });
+  // 正则里一个字面字符都没有时（重复项由 \d、\w、[0-9] 这类字符类构成），
+  // 退而从字符类集合里取代表字符；否则默认字符可能根本不在类中，探测输入
+  // 第一步就失败，经验探针会把指数级结构误判成“线性”
+  if (freq.size === 0) {
+    walk(ast, (n) => {
+      if (n.type !== 'charClass') return;
+      const cp = representativeCp(n.set);
+      if (cp !== null) bump(cp);
+    });
+  }
   let best = 0x61; // 默认 a
   let bestN = -1;
   freq.forEach((n, cp) => {

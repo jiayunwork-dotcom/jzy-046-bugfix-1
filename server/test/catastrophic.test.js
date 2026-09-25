@@ -63,6 +63,29 @@ test('经验探针：线性正则判为 linear-or-better', () => {
   assert.ok(last.attempts < last.length * 20);
 });
 
+test('经验探针：重复项由字符类构成时同样判为 exponential', () => {
+  // 探测字符必须取自字符类集合，否则输入第一步就失败、测不到回溯爆炸
+  for (const p of ['(\\d+)+$', '([0-9]+)+', '(\\w+)+$']) {
+    const r = analyzePattern(parsePattern(p), p);
+    assert.equal(r.classification, 'exponential', p);
+    assert.equal(r.dangerous, true, p); // 经验结论与静态危险等级一致
+  }
+}, { timeout: 20000 });
+
+test('经验探针：相邻字符类量词 \\d+\\w+ 判为 quadratic-or-worse', () => {
+  const p = '\\d+\\w+';
+  const r = analyzePattern(parsePattern(p), p);
+  assert.equal(r.classification, 'quadratic-or-worse');
+  assert.ok(r.warnings.some((w) => w.kind === 'adjacent-unbounded'));
+});
+
+test('经验探针：纯字符类的安全正则仍判为 linear-or-better', () => {
+  for (const p of ['\\d+', '[a-z]+', '\\w+\\s']) {
+    const r = empiricalProbe(parsePattern(p), p, { lengths: [10, 20, 40, 80] });
+    assert.equal(r.classification, 'linear-or-better', p);
+  }
+});
+
 test('分析报告带改写建议（针对嵌套量词与否定字符类）', () => {
   const r = analyzePattern(parsePattern('(a+)+b'), '(a+)+b');
   assert.ok(r.empirical.suggestion.length >= 2);
